@@ -7,3 +7,7 @@ sqlalchemy
 python-dotenv
 pymupdf
 pdfplumber
+google-auth
+requests
+pyjwt
+email-validator

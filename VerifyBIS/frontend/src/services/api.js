@@ -10,15 +10,29 @@ async function request(
 
   const response = await fetch(
     `${API_URL}${endpoint}`,
-    options
+    {
+      credentials: "include",
+      ...options
+    }
   );
 
   if (!response.ok) {
 
-    throw new Error(
-      `API Error: ${response.status}`
-    );
+    let message = `API Error: ${response.status}`;
 
+    try {
+      const data = await response.json();
+      if (data?.detail) message = data.detail;
+    } catch {
+      // response had no JSON body
+    }
+
+    throw new Error(message);
+
+  }
+
+  if (response.status === 204) {
+    return null;
   }
 
   return response.json();
@@ -26,6 +40,45 @@ async function request(
 
 
 export const api = {
+
+  googleLogin(credential) {
+    return request("/auth/google", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential })
+    });
+  },
+
+
+  login(email, password) {
+    return request("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password })
+    });
+  },
+
+
+  register(name, email, password) {
+    return request("/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, email, password })
+    });
+  },
+
+
+  getMe() {
+    return request("/auth/me");
+  },
+
+
+  logout() {
+    return request("/auth/logout", {
+      method: "POST"
+    });
+  },
+
 
   getDashboard() {
     return request("/dashboard");
