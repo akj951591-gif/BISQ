@@ -1,5 +1,6 @@
-# BIS documents / local dataset
-VerifyBIS/backend/data/documents/
+# Local BIS dataset / generated files
+VerifyBIS/backend/data/
+VerifyBIS/backend/standardsiq.db
 VerifyBIS/backend/test-report.pdf
 
 # Python
@@ -7,20 +8,19 @@ VerifyBIS/backend/test-report.pdf
 **/.venv/
 **/venv/
 
-# Node
+# Frontend
 **/node_modules/
 **/dist/
 
-# Environment / secrets
-.env
-**/.env
-
-# Database / local storage
+# Local databases / model files
 **/postgres_data/
 **/neo4j_data/
-
-# ML artifacts
 **/*.pt
 **/*.bin
 **/*.safetensors
 **/*.onnx
+
+# Secrets
+.env
+.env.*
+!.env.example
