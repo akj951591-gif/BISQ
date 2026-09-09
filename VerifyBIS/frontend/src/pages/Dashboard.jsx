@@ -1,199 +1,388 @@
-import { useNavigate } from "react-router-dom";
-
-const tenders = [
-  {
-    id: "tndr-2026-8842",
-    name: "Smart Grid Metering — Phase II",
-    ref: "TNDR-2026-8842",
-    category: "Electrical",
-    standards: 12,
-    status: "Verified",
-    risk: "Low",
-    updated: "2 hours ago",
-  },
-  {
-    id: "tndr-2026-8901",
-    name: "Highway Illumination Infrastructure",
-    ref: "TNDR-2026-8901",
-    category: "Civil / Electrical",
-    standards: 8,
-    status: "Verified",
-    risk: "Low",
-    updated: "5 hours ago",
-  },
-  {
-    id: "tndr-2026-9022",
-    name: "Public Transit Surveillance System",
-    ref: "TNDR-2026-9022",
-    category: "IT / Security",
-    standards: 4,
-    status: "Deviations Found",
-    risk: "High",
-    updated: "Yesterday",
-  },
-  {
-    id: "tndr-2026-8755",
-    name: "Municipal Water Treatment Plant",
-    ref: "TNDR-2026-8755",
-    category: "Civil",
-    standards: 24,
-    status: "Pending Review",
-    risk: "Medium",
-    updated: "2 days ago",
-  },
-];
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import {
+  FileText,
+  ShieldCheck,
+  Database,
+  BarChart3,
+  ArrowRight,
+  RefreshCw,
+  CheckCircle2,
+  AlertCircle,
+  XCircle,
+} from "lucide-react";
+import { api } from "../services/api.js";
 
 export default function Dashboard() {
-  const navigate = useNavigate();
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState("");
+
+  async function loadDashboard(isRefresh = false) {
+    try {
+      if (isRefresh) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
+      }
+
+      setError("");
+
+      const result = await api.getDashboard();
+      setData(result);
+    } catch (err) {
+      console.error(err);
+      setError(err.message || "Failed to load dashboard.");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }
+
+  useEffect(() => {
+    loadDashboard();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="page dashboard-page">
+        <div className="dashboard-loading">
+          <div className="loading-spinner" />
+          <span>Loading dashboard...</span>
+        </div>
+      </div>
+    );
+  }
+
+  const stats = data?.stats || {};
+  const recentTenders = data?.recent_tenders || [];
 
   return (
-    <>
-      {/* PAGE HEADER */}
-      <div className="page-header">
+    <div className="page dashboard-page">
+
+      {/* HEADER */}
+      <div className="dashboard-header">
         <div>
-          <div className="eyebrow">OVERVIEW</div>
-          <h1>Compliance Intelligence</h1>
+          <div className="dashboard-eyebrow">
+            BIS COMPLIANCE PLATFORM
+          </div>
+
+          <h1>BISQ Dashboard</h1>
+
           <p>
-            Analyze tender requirements against verified BIS standards and
-            regulatory requirements.
+            BIS Compliance & Intelligence overview.
           </p>
         </div>
 
-        <div className="actions">
-          <button className="secondary-button">Export Summary</button>
-          <button
-            className="primary-button"
-            onClick={() => navigate("/tenders/new")}
-          >
-            Analyze New Tender
-          </button>
-        </div>
+        <button
+          type="button"
+          className="secondary-button refresh-button"
+          onClick={() => loadDashboard(true)}
+          disabled={refreshing}
+        >
+          <RefreshCw
+            size={15}
+            className={refreshing ? "spin" : ""}
+          />
+
+          {refreshing ? "Refreshing..." : "Refresh"}
+        </button>
       </div>
+
+      {/* ERROR */}
+      {error && (
+        <div className="error-message dashboard-error">
+          <AlertCircle size={18} />
+          <span>{error}</span>
+        </div>
+      )}
 
       {/* STAT CARDS */}
-      <div className="stats">
-        <div className="stat">
-          <div className="stat-label">TENDERS ANALYZED</div>
-          <div className="stat-number">124</div>
-          <div className="stat-note positive">↑ 12 this week</div>
+      <div className="stats-grid">
+
+        <div className="stat-card">
+          <div className="stat-card-icon standards-icon">
+            <ShieldCheck size={22} />
+          </div>
+
+          <div className="stat-card-content">
+            <span className="stat-card-label">
+              Total BIS Standards
+            </span>
+
+            <strong className="stat-card-value">
+              {stats.total_standards ?? 0}
+            </strong>
+
+            <span className="stat-card-description">
+              Standards available in BISQ
+            </span>
+          </div>
         </div>
 
-        <div className="stat">
-          <div className="stat-label">COMPLIANCE RATE</div>
-          <div className="stat-number">92%</div>
-          <div className="stat-note">Across active tenders</div>
+        <div className="stat-card">
+          <div className="stat-card-icon chunks-icon">
+            <Database size={22} />
+          </div>
+
+          <div className="stat-card-content">
+            <span className="stat-card-label">
+              Indexed Chunks
+            </span>
+
+            <strong className="stat-card-value">
+              {stats.total_chunks ?? 0}
+            </strong>
+
+            <span className="stat-card-description">
+              Searchable knowledge chunks
+            </span>
+          </div>
         </div>
 
-        <div className="stat danger">
-          <div className="stat-label">CRITICAL ISSUES</div>
-          <div className="stat-number danger-number">3</div>
-          <div className="stat-note danger-text">Requires attention</div>
+        <div className="stat-card">
+          <div className="stat-card-icon tender-icon">
+            <FileText size={22} />
+          </div>
+
+          <div className="stat-card-content">
+            <span className="stat-card-label">
+              Tender Analyses
+            </span>
+
+            <strong className="stat-card-value">
+              {stats.total_tenders ?? 0}
+            </strong>
+
+            <span className="stat-card-description">
+              Compliance analyses completed
+            </span>
+          </div>
         </div>
 
-        <div className="stat">
-          <div className="stat-label">STANDARDS MATCHED</div>
-          <div className="stat-number">1,205</div>
-          <div className="stat-note">Verified BIS</div>
+        <div className="stat-card">
+          <div className="stat-card-icon reports-icon">
+            <BarChart3 size={22} />
+          </div>
+
+          <div className="stat-card-content">
+            <span className="stat-card-label">
+              Reports Generated
+            </span>
+
+            <strong className="stat-card-value">
+              {stats.total_reports ?? 0}
+            </strong>
+
+            <span className="stat-card-description">
+              Compliance reports created
+            </span>
+          </div>
         </div>
+
       </div>
 
-      {/* TABLE */}
-      <section className="table-card">
-        <div className="table-header">
-          <div>
-            <h2>Recent Tender Analysis</h2>
-            <p>Latest compliance verification activity</p>
+      {/* TWO COLUMN SECTION */}
+      <div className="dashboard-grid">
+
+        {/* COMPLIANCE */}
+        <section className="dashboard-card compliance-card">
+          <div className="section-header">
+            <div>
+              <h2>Compliance Overview</h2>
+              <p>
+                Current tender analysis results.
+              </p>
+            </div>
+
+            <ShieldCheck size={21} />
           </div>
-          <button className="more">•••</button>
+
+          <div className="compliance-stats">
+
+            <div className="compliance-stat compliant">
+              <div className="compliance-stat-icon">
+                <CheckCircle2 size={19} />
+              </div>
+
+              <div>
+                <strong>
+                  {stats.compliant ?? 0}
+                </strong>
+
+                <span>Compliant</span>
+              </div>
+            </div>
+
+            <div className="compliance-stat evidence">
+              <div className="compliance-stat-icon">
+                <AlertCircle size={19} />
+              </div>
+
+              <div>
+                <strong>
+                  {stats.needs_evidence ?? 0}
+                </strong>
+
+                <span>Needs Evidence</span>
+              </div>
+            </div>
+
+            <div className="compliance-stat non-compliant">
+              <div className="compliance-stat-icon">
+                <XCircle size={19} />
+              </div>
+
+              <div>
+                <strong>
+                  {stats.non_compliant ?? 0}
+                </strong>
+
+                <span>Non-Compliant</span>
+              </div>
+            </div>
+
+          </div>
+        </section>
+
+        {/* QUICK ACTIONS */}
+        <section className="dashboard-card quick-actions-card">
+          <div className="section-header">
+            <div>
+              <h2>Quick Actions</h2>
+              <p>
+                Start a new compliance workflow.
+              </p>
+            </div>
+          </div>
+
+          <div className="quick-actions">
+
+            <Link
+              to="/tenders/new"
+              className="primary-button quick-action-primary"
+            >
+              <FileText size={17} />
+              <span>Analyze Tender</span>
+              <ArrowRight size={15} />
+            </Link>
+
+            <Link
+              to="/standards"
+              className="secondary-button"
+            >
+              <ShieldCheck size={16} />
+              Search BIS Standards
+            </Link>
+
+            <Link
+              to="/reports"
+              className="secondary-button"
+            >
+              <BarChart3 size={16} />
+              View Reports
+            </Link>
+
+          </div>
+        </section>
+
+      </div>
+
+      {/* RECENT ANALYSES */}
+      <section className="dashboard-card recent-card">
+
+        <div className="section-header">
+          <div>
+            <h2>Recent Tender Analyses</h2>
+            <p>
+              Latest compliance analyses processed by BISQ.
+            </p>
+          </div>
+
+          <Link
+            to="/tenders"
+            className="view-all-link"
+          >
+            View all
+            <ArrowRight size={15} />
+          </Link>
         </div>
 
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>TENDER SPECIFICATION</th>
-                <th>CATEGORY</th>
-                <th>STANDARDS</th>
-                <th>COMPLIANCE</th>
-                <th>RISK</th>
-                <th>UPDATED</th>
-                <th></th>
-              </tr>
-            </thead>
+        {recentTenders.length === 0 ? (
+          <div className="empty-state dashboard-empty-state">
 
-            <tbody>
-              {tenders.map((tender) => (
-                <tr
-                  key={tender.ref}
-                  className={tender.risk === "High" ? "warning-row" : ""}
-                  onClick={() => navigate(`/tenders/${tender.id}`)}
-                  style={{ cursor: "pointer" }}
-                >
-                  <td>
-                    <strong className="tender-name">{tender.name}</strong>
-                    <small className="tender-ref">{tender.ref}</small>
-                  </td>
+            <div className="empty-state-icon">
+              <FileText size={25} />
+            </div>
 
-                  <td>{tender.category}</td>
+            <h3>No tender analyses yet</h3>
 
-                  <td>
-                    <strong className="standard-count">
-                      {tender.standards}
+            <p>
+              Upload a tender to start your first
+              compliance analysis.
+            </p>
+
+            <Link
+              to="/tenders/new"
+              className="primary-button"
+            >
+              Analyze Tender
+              <ArrowRight size={15} />
+            </Link>
+
+          </div>
+        ) : (
+          <div className="recent-tenders">
+
+            {recentTenders.map((tender) => (
+              <Link
+                key={tender.id}
+                to={`/tenders/${tender.id}`}
+                className="recent-tender-row"
+              >
+                <div className="recent-tender-info">
+
+                  <div className="recent-tender-icon">
+                    <FileText size={18} />
+                  </div>
+
+                  <div>
+                    <strong>
+                      {tender.filename ||
+                        `Tender #${tender.id}`}
                     </strong>
-                  </td>
 
-                  <td>
-                    <span
-                      className={
-                        tender.status === "Verified"
-                          ? "badge verified"
-                          : tender.status === "Deviations Found"
-                          ? "badge deviation"
-                          : "badge pending"
-                      }
-                    >
-                      {tender.status}
+                    <span>
+                      {tender.findings_count ?? 0} findings
                     </span>
-                  </td>
+                  </div>
 
-                  <td>
-                    <span
-                      className={
-                        tender.risk === "Low"
-                          ? "badge low"
-                          : tender.risk === "Medium"
-                          ? "badge medium"
-                          : "badge high"
-                      }
-                    >
-                      {tender.risk}
-                    </span>
-                  </td>
+                </div>
 
-                  <td className="updated">{tender.updated}</td>
+                <div className="recent-tender-right">
 
-                  <td className="arrow">→</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                  <span
+                    className={`status-badge status-${String(
+                      tender.status || "NEEDS_EVIDENCE"
+                    )
+                      .toLowerCase()
+                      .replaceAll("_", "-")}`}
+                  >
+                    {tender.status || "NEEDS_EVIDENCE"}
+                  </span>
+
+                  <ArrowRight size={16} />
+
+                </div>
+              </Link>
+            ))}
+
+          </div>
+        )}
+
       </section>
 
-      {/* BOTTOM INSIGHT */}
-      <section className="insight">
-        <div className="insight-icon">✓</div>
-
-        <div>
-          <strong>Verification pipeline healthy</strong>
-          <p>
-            Standards matching and compliance validation are operating
-            normally.
-          </p>
-        </div>
-
-        <button>View system status →</button>
-      </section>
-    </>
+    </div>
   );
 }

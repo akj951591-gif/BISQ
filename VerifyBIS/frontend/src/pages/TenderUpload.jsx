@@ -1,220 +1,512 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
+import {
+  Upload,
+  FileText,
+  Loader2,
+  CheckCircle2,
+  AlertTriangle,
+  XCircle,
+} from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { Upload, FileText, Type, Link2, CheckCircle2, Circle, Loader2 } from "lucide-react";
-import { getTenderById } from "../data/mockTenders.js";
+import { api } from "../services/api.js";
 
-const INPUT_MODES = [
-  { key: "pdf", label: "Tender PDF", icon: FileText, hint: "PDF or scanned document" },
-  { key: "text", label: "Free Text", icon: Type, hint: "Paste specification text" },
-  { key: "gem", label: "GeM Product URL", icon: Link2, hint: "Link to a GeM listing" },
-];
 
-// Mirrors the pipeline in TechStack_Architecture.docx
-const PIPELINE_STAGES = [
-  { title: "AI Document Reader", detail: "Layout parsing via PyMuPDF / DocLayout-YOLO + OCR" },
-  { title: "Requirement Extraction", detail: "Segmenting spec tables from boilerplate clauses" },
-  { title: "Hybrid Search Engine", detail: "BM25 sparse + BGE-M3 dense, RRF re-ranking" },
-  { title: "RAG Retrieval", detail: "Pulling matched BIS standards, scope & amendments" },
-  { title: "Normative Graph (Neo4j)", detail: "Resolving related & certification standards" },
-  { title: "Validation / Rule Engine", detail: "Checking versioning, QCO & missing requirements" },
-  { title: "Structured Result", detail: "Assembling verified, database-grounded record" },
-  { title: "LLM Reasoning", detail: "Llama-3.3-70B, Pydantic-constrained generation" },
-  { title: "Verified Output", detail: "Publishing audit-ready compliance record" },
-];
+function StatusIcon({ status }) {
+  if (status === "COMPLIANT") {
+    return <CheckCircle2 size={18} />;
+  }
 
-const DEMO_RESULT_ID = "tndr-2026-8755";
+  if (status === "NON_COMPLIANT") {
+    return <XCircle size={18} />;
+  }
+
+  return <AlertTriangle size={18} />;
+}
+
 
 export default function TenderUpload() {
   const navigate = useNavigate();
-  const [mode, setMode] = useState("pdf");
-  const [tenderName, setTenderName] = useState("");
-  const [freeText, setFreeText] = useState("");
-  const [gemUrl, setGemUrl] = useState("");
-  const [fileName, setFileName] = useState("");
-  const [running, setRunning] = useState(false);
-  const [stage, setStage] = useState(-1);
-  const [done, setDone] = useState(false);
-  const timerRef = useRef(null);
 
-  useEffect(() => {
-    return () => clearInterval(timerRef.current);
-  }, []);
+  const [file, setFile] = useState(null);
+  const [dragging, setDragging] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState(null);
 
-  const hasInput =
-    (mode === "pdf" && fileName) ||
-    (mode === "text" && freeText.trim().length > 0) ||
-    (mode === "gem" && gemUrl.trim().length > 0);
 
-  function runAnalysis() {
-    if (!hasInput || running) return;
-    setRunning(true);
-    setDone(false);
-    setStage(0);
+  function handleFile(selectedFile) {
+    if (!selectedFile) {
+      return;
+    }
 
-    let i = 0;
-    timerRef.current = setInterval(() => {
-      i += 1;
-      if (i >= PIPELINE_STAGES.length) {
-        clearInterval(timerRef.current);
-        setStage(PIPELINE_STAGES.length - 1);
-        setRunning(false);
-        setDone(true);
-        return;
-      }
-      setStage(i);
-    }, 550);
+    const isPdf =
+      selectedFile.type === "application/pdf" ||
+      selectedFile.name
+        .toLowerCase()
+        .endsWith(".pdf");
+
+    const isTxt =
+      selectedFile.type === "text/plain" ||
+      selectedFile.name
+        .toLowerCase()
+        .endsWith(".txt");
+
+    if (!isPdf && !isTxt) {
+      setError(
+        "Please upload a PDF or TXT tender."
+      );
+      return;
+    }
+
+    setError("");
+    setResult(null);
+    setFile(selectedFile);
   }
 
-  const demo = getTenderById(DEMO_RESULT_ID);
+
+  function handleDrop(event) {
+    event.preventDefault();
+
+    setDragging(false);
+
+    const droppedFile =
+      event.dataTransfer.files?.[0];
+
+    handleFile(droppedFile);
+  }
+
+
+  async function handleAnalyze() {
+    if (!file) {
+      setError(
+        "Please select a tender file first."
+      );
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setError("");
+      setResult(null);
+
+      const response =
+        await api.analyzeTender(file);
+
+      setResult(response);
+
+    } catch (err) {
+      setError(
+        err?.message ||
+        "Tender analysis failed."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+
+  function statusClass(status) {
+    if (status === "COMPLIANT") {
+      return "success";
+    }
+
+    if (status === "NON_COMPLIANT") {
+      return "danger";
+    }
+
+    return "warning";
+  }
+
 
   return (
-    <>
+    <div>
       <div className="page-header">
         <div>
-          <div className="eyebrow">ANALYSIS</div>
-          <h1>Analyze New Tender</h1>
+          <div className="eyebrow">
+            TENDER ANALYSIS
+          </div>
+
+          <h1>Analyze Tender</h1>
+
           <p>
-            Submit a tender document, scanned image, free text, or GeM
-            product link to run it through the compliance pipeline.
+            Upload a tender document and compare
+            its requirements against BIS standards.
           </p>
         </div>
       </div>
 
-      <div className="upload-grid">
-        <section className="table-card upload-card">
-          <div className="table-header">
-            <div>
-              <h2>Tender Input</h2>
-              <p>Choose how you'd like to submit this tender</p>
-            </div>
-          </div>
 
-          <div style={{ padding: "18px" }}>
-            <label className="field-label">Tender name</label>
-            <input
-              className="field-input"
-              placeholder="e.g. Smart Grid Metering — Phase III"
-              value={tenderName}
-              onChange={(e) => setTenderName(e.target.value)}
-            />
-
-            <div className="mode-tabs">
-              {INPUT_MODES.map((m) => {
-                const Icon = m.icon;
-                return (
-                  <button
-                    key={m.key}
-                    className={`mode-tab ${mode === m.key ? "mode-tab-active" : ""}`}
-                    onClick={() => setMode(m.key)}
-                  >
-                    <Icon size={13} />
-                    {m.label}
-                  </button>
-                );
-              })}
-            </div>
-
-            {mode === "pdf" && (
-              <label className="dropzone">
-                <Upload size={20} />
-                <strong>{fileName || "Click to upload a PDF or image"}</strong>
-                <span>Supports scanned tenders — OCR runs automatically</span>
-                <input
-                  type="file"
-                  accept=".pdf,.png,.jpg,.jpeg"
-                  style={{ display: "none" }}
-                  onChange={(e) => setFileName(e.target.files?.[0]?.name || "")}
-                />
-              </label>
-            )}
-
-            {mode === "text" && (
-              <textarea
-                className="field-textarea"
-                placeholder="Paste tender specification text here..."
-                value={freeText}
-                onChange={(e) => setFreeText(e.target.value)}
-              />
-            )}
-
-            {mode === "gem" && (
-              <input
-                className="field-input"
-                placeholder="https://gem.gov.in/product/..."
-                value={gemUrl}
-                onChange={(e) => setGemUrl(e.target.value)}
-              />
-            )}
-
-            <button
-              className="primary-button run-button"
-              disabled={!hasInput || running}
-              onClick={runAnalysis}
-            >
-              {running ? "Analyzing…" : "Run Compliance Analysis"}
-            </button>
-          </div>
-        </section>
-
+      {!result && (
         <section className="table-card">
           <div className="table-header">
             <div>
-              <h2>Pipeline Progress</h2>
-              <p>Ingestion → retrieval → graph validation → generation</p>
+              <h2>Upload Tender</h2>
+
+              <p>
+                PDF and TXT files are supported.
+              </p>
             </div>
           </div>
 
-          <div className="pipeline-list">
-            {PIPELINE_STAGES.map((s, idx) => {
-              const isDone = done || (running && idx < stage);
-              const isActive = running && idx === stage;
 
-              return (
-                <div
-                  key={s.title}
-                  className={`pipeline-step ${isActive ? "pipeline-step-active" : ""} ${
-                    isDone ? "pipeline-step-done" : ""
-                  }`}
-                >
-                  <div className="pipeline-step-icon">
-                    {isDone ? (
-                      <CheckCircle2 size={15} />
-                    ) : isActive ? (
-                      <Loader2 size={15} className="spin" />
-                    ) : (
-                      <Circle size={15} />
-                    )}
-                  </div>
+          <div
+            onDragOver={(event) => {
+              event.preventDefault();
+              setDragging(true);
+            }}
+            onDragLeave={() => {
+              setDragging(false);
+            }}
+            onDrop={handleDrop}
+            style={{
+              margin: "20px",
+              padding: "50px 30px",
+              border: "2px dashed var(--border)",
+              borderRadius: "12px",
+              textAlign: "center",
+              background: dragging
+                ? "var(--surface-alt)"
+                : "transparent",
+              transition: "0.2s",
+            }}
+          >
+            <Upload
+              size={32}
+              style={{
+                marginBottom: "12px",
+              }}
+            />
 
-                  <div>
-                    <strong>{s.title}</strong>
-                    <p>{s.detail}</p>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-      </div>
+            <h3>
+              {file
+                ? file.name
+                : "Drop your tender here"}
+            </h3>
 
-      {done && demo && (
-        <section className="insight" style={{ marginTop: 14 }}>
-          <div className="insight-icon">✓</div>
-
-          <div>
-            <strong>Analysis complete — {demo.standards} standards matched</strong>
             <p>
-              This is a sample result from the compliance pipeline. Open the
-              full report to see requirement extraction, graph relations and
-              validation findings.
+              {file
+                ? `${(
+                    file.size /
+                    1024 /
+                    1024
+                  ).toFixed(2)} MB`
+                : "or choose a PDF or TXT file"}
             </p>
+
+
+            <label
+              className="primary-button"
+              style={{
+                display: "inline-flex",
+                cursor: "pointer",
+                marginTop: "12px",
+              }}
+            >
+              <FileText size={14} />
+
+              Choose File
+
+              <input
+                type="file"
+                accept=".pdf,.txt,application/pdf,text/plain"
+                hidden
+                onChange={(event) =>
+                  handleFile(
+                    event.target.files?.[0]
+                  )
+                }
+              />
+            </label>
           </div>
 
-          <button onClick={() => navigate(`/tenders/${demo.id}`)}>
-            View Full Report →
-          </button>
+
+          {error && (
+            <div
+              style={{
+                margin: "20px",
+                padding: "14px",
+                borderRadius: "8px",
+                background:
+                  "var(--danger-bg)",
+                color: "var(--danger)",
+              }}
+            >
+              {error}
+            </div>
+          )}
+
+
+          <div
+            style={{
+              padding: "0 20px 20px",
+              display: "flex",
+              justifyContent: "flex-end",
+            }}
+          >
+            <button
+              className="primary-button"
+              disabled={!file || loading}
+              onClick={handleAnalyze}
+            >
+              {loading ? (
+                <>
+                  <Loader2
+                    size={14}
+                    className="spin"
+                  />
+
+                  Analyzing...
+                </>
+              ) : (
+                <>
+                  <FileText size={14} />
+
+                  Analyze Tender
+                </>
+              )}
+            </button>
+          </div>
         </section>
       )}
-    </>
+
+
+      {result && (
+        <div
+          style={{
+            display: "grid",
+            gap: "20px",
+          }}
+        >
+          <section className="table-card">
+            <div
+              style={{
+                padding: "24px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "20px",
+                flexWrap: "wrap",
+              }}
+            >
+              <div>
+                <div className="eyebrow">
+                  ANALYSIS RESULT
+                </div>
+
+                <h2>
+                  {file?.name ||
+                    result.filename ||
+                    "Tender"}
+                </h2>
+
+                <p>
+                  {result.summary ||
+                    "Analysis completed."}
+                </p>
+              </div>
+
+
+              <div
+                className={`badge ${statusClass(
+                  result.status
+                )}`}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  padding: "8px 12px",
+                }}
+              >
+                <StatusIcon
+                  status={result.status}
+                />
+
+                {result.status ||
+                  "NEEDS_EVIDENCE"}
+              </div>
+            </div>
+          </section>
+
+
+          <section className="table-card">
+            <div className="table-header">
+              <div>
+                <h2>
+                  Compliance Findings
+                </h2>
+
+                <p>
+                  {result.findings?.length || 0}{" "}
+                  findings identified.
+                </p>
+              </div>
+            </div>
+
+
+            <div style={{ padding: "20px" }}>
+              {result.findings?.length ? (
+                result.findings.map(
+                  (finding, index) => (
+                    <div
+                      key={index}
+                      style={{
+                        padding: "18px",
+                        border: "1px solid var(--border)",
+                        borderRadius: "10px",
+                        marginBottom: "12px",
+                      }}
+                    >
+                      <h3>
+                        {index + 1}.{" "}
+                        {finding.requirement}
+                      </h3>
+
+                      <p>
+                        <strong>
+                          Assessment:
+                        </strong>{" "}
+                        {finding.assessment}
+                      </p>
+
+                      <p>
+                        <strong>
+                          Evidence:
+                        </strong>{" "}
+                        {finding.evidence}
+                      </p>
+
+                      <p>
+                        <strong>
+                          Source:
+                        </strong>{" "}
+                        {finding.source}
+
+                        {finding.page
+                          ? ` — Page ${finding.page}`
+                          : ""}
+                      </p>
+                    </div>
+                  )
+                )
+              ) : (
+                <div
+                  style={{
+                    padding: "30px",
+                    textAlign: "center",
+                  }}
+                >
+                  No specific findings were
+                  generated.
+                </div>
+              )}
+            </div>
+          </section>
+
+
+          <section className="table-card">
+            <div className="table-header">
+              <div>
+                <h2>
+                  Relevant BIS Standards
+                </h2>
+
+                <p>
+                  Standards retrieved from the
+                  BIS knowledge base.
+                </p>
+              </div>
+            </div>
+
+
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>STANDARD</th>
+                    <th>TITLE</th>
+                    <th>YEAR</th>
+                    <th>PAGE</th>
+                    <th></th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {result.sources?.map(
+                    (source, index) => (
+                      <tr key={index}>
+                        <td>
+                          <span className="mono">
+                            {source.is_number ||
+                              source.document_id ||
+                              "—"}
+                          </span>
+                        </td>
+
+                        <td>
+                          {source.title ||
+                            "Untitled"}
+                        </td>
+
+                        <td>
+                          {source.year || "—"}
+                        </td>
+
+                        <td>
+                          {source.page_number ||
+                            "—"}
+                        </td>
+
+                        <td>
+                          {source.pdf_url && (
+                            <a
+                              href={
+                                source.pdf_url
+                              }
+                              target="_blank"
+                              rel="noreferrer"
+                              className="source-link"
+                            >
+                              Open
+                            </a>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+
+          <div
+            style={{
+              display: "flex",
+              gap: "10px",
+              justifyContent: "flex-end",
+            }}
+          >
+            <button
+              className="secondary-button"
+              onClick={() => {
+                setResult(null);
+                setFile(null);
+              }}
+            >
+              Analyze Another
+            </button>
+
+            <button
+              className="primary-button"
+              onClick={() =>
+                navigate("/reports")
+              }
+            >
+              View Reports
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

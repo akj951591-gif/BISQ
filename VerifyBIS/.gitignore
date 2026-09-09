@@ -1,15 +1,26 @@
+# BIS documents / local dataset
+VerifyBIS/backend/data/documents/
+VerifyBIS/backend/test-report.pdf
+
 # Python
-venv/
-__pycache__/
-*.pyc
-.env
-*.db
+**/__pycache__/
+**/.venv/
+**/venv/
 
 # Node
-node_modules/
-dist/
-.env.local
+**/node_modules/
+**/dist/
 
-# Editor / OS
-.vscode/
-.DS_Store
+# Environment / secrets
+.env
+**/.env
+
+# Database / local storage
+**/postgres_data/
+**/neo4j_data/
+
+# ML artifacts
+**/*.pt
+**/*.bin
+**/*.safetensors
+**/*.onnx

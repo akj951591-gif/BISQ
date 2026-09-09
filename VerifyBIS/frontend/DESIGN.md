@@ -1,5 +1,5 @@
 ---
-name: StandardsIQ
+name: BISQ
 colors:
   surface: '#faf8ff'
   surface-dim: '#d2d9f4'

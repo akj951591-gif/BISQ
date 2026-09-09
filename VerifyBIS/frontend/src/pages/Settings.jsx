@@ -7,7 +7,7 @@ export default function Settings() {
         <div>
           <div className="eyebrow">SYSTEM</div>
           <h1>Settings</h1>
-          <p>Configure your StandardsIQ workspace.</p>
+          <p>Configure your BISQ workspace.</p>
         </div>
       </div>
 

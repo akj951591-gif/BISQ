@@ -114,7 +114,7 @@ export default function Login() {
         <div className="auth-logo-badge">
           <ShieldCheck size={26} />
         </div>
-        <h1 className="auth-app-name">VerifyBIS</h1>
+        <h1 className="auth-app-name">BISQ</h1>
         <p className="auth-app-subtitle">BIS Compliance Platform</p>
 
         <div className="auth-card">

@@ -29,7 +29,7 @@ export default function Sidebar() {
         </div>
 
         <div>
-          <div className="brand-title">VerifyBIS</div>
+          <div className="brand-title">BISQ</div>
           <div className="brand-subtitle">Enterprise Compliance</div>
         </div>
       </div>

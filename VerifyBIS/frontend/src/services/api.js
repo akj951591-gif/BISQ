@@ -3,32 +3,36 @@ const API_URL =
   "http://localhost:8000/api";
 
 
-async function request(
-  endpoint,
-  options = {}
-) {
+/* =========================================================
+   GENERIC REQUEST HELPER
+========================================================= */
 
+async function request(endpoint, options = {}) {
   const response = await fetch(
     `${API_URL}${endpoint}`,
     {
       credentials: "include",
-      ...options
+      ...options,
     }
   );
 
   if (!response.ok) {
-
     let message = `API Error: ${response.status}`;
 
     try {
       const data = await response.json();
-      if (data?.detail) message = data.detail;
+
+      if (data?.detail) {
+        message =
+          typeof data.detail === "string"
+            ? data.detail
+            : JSON.stringify(data.detail);
+      }
     } catch {
-      // response had no JSON body
+      // Response had no JSON body
     }
 
     throw new Error(message);
-
   }
 
   if (response.status === 204) {
@@ -39,13 +43,48 @@ async function request(
 }
 
 
+/* =========================================================
+   QUERY STRING HELPER
+========================================================= */
+
+function queryString(params = {}) {
+  const search = new URLSearchParams();
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (
+      value !== undefined &&
+      value !== null &&
+      value !== ""
+    ) {
+      search.set(key, String(value));
+    }
+  });
+
+  const result = search.toString();
+
+  return result ? `?${result}` : "";
+}
+
+
+/* =========================================================
+   API
+========================================================= */
+
 export const api = {
+
+  // =======================================================
+  // AUTH
+  // =======================================================
 
   googleLogin(credential) {
     return request("/auth/google", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ credential })
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        credential,
+      }),
     });
   },
 
@@ -53,8 +92,13 @@ export const api = {
   login(email, password) {
     return request("/auth/login", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password })
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        email,
+        password,
+      }),
     });
   },
 
@@ -62,8 +106,14 @@ export const api = {
   register(name, email, password) {
     return request("/auth/register", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, email, password })
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        name,
+        email,
+        password,
+      }),
     });
   },
 
@@ -75,15 +125,32 @@ export const api = {
 
   logout() {
     return request("/auth/logout", {
-      method: "POST"
+      method: "POST",
     });
   },
 
+
+  // =======================================================
+  // HEALTH
+  // =======================================================
+
+  health() {
+    return request("/health");
+  },
+
+
+  // =======================================================
+  // DASHBOARD
+  // =======================================================
 
   getDashboard() {
     return request("/dashboard");
   },
 
+
+  // =======================================================
+  // TENDERS
+  // =======================================================
 
   getTenders() {
     return request("/tenders");
@@ -91,41 +158,46 @@ export const api = {
 
 
   getTender(id) {
-    return request(`/tenders/${id}`);
-  },
-
-
-  getCompliance(id) {
     return request(
-      `/tenders/${id}/compliance`
+      `/tenders/${encodeURIComponent(id)}`
     );
   },
 
 
-  getStandards() {
-    return request("/standards");
+  getTenderCompliance(id) {
+    return request(
+      `/tenders/${encodeURIComponent(id)}/compliance`
+    );
   },
 
 
-  getReports() {
-    return request("/reports");
+  // Compatibility with existing frontend
+  getCompliance(id) {
+    return request(
+      `/tenders/${encodeURIComponent(id)}/compliance`
+    );
   },
 
 
   analyzeTender(file, metadata = {}) {
-
     const formData = new FormData();
 
-    formData.append("file", file);
+    if (file) {
+      formData.append("file", file);
+    }
 
     Object.entries(metadata).forEach(
       ([key, value]) => {
-
-        formData.append(
-          key,
-          value
-        );
-
+        if (
+          value !== undefined &&
+          value !== null &&
+          value !== ""
+        ) {
+          formData.append(
+            key,
+            value
+          );
+        }
       }
     );
 
@@ -133,10 +205,211 @@ export const api = {
       "/tenders/analyze",
       {
         method: "POST",
-        body: formData
+        body: formData,
       }
     );
+  },
 
-  }
+
+  analyzeTenderText(
+    text,
+    metadata = {}
+  ) {
+    return request(
+      "/tenders/analyze-text",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text,
+          ...metadata,
+        }),
+      }
+    );
+  },
+
+
+  // =======================================================
+  // BIS STANDARDS
+  // =======================================================
+
+  getStandards(params = {}) {
+    return request(
+      `/standards${queryString(params)}`
+    );
+  },
+
+
+  getStandard(id) {
+    return request(
+      `/standards/${encodeURIComponent(id)}`
+    );
+  },
+
+
+  searchStandards(
+    query,
+    limit = 20,
+    offset = 0
+  ) {
+    return request(
+      `/standards/search${queryString({
+        q: query,
+        limit,
+        offset,
+      })}`
+    );
+  },
+
+
+  // =======================================================
+  // NEO4J KNOWLEDGE GRAPH
+  // =======================================================
+
+  getStandardGraph(documentId) {
+    return request(
+      `/graph/standard/${encodeURIComponent(
+        documentId
+      )}`
+    );
+  },
+
+
+  getGraphHealth() {
+    return request("/graph/health");
+  },
+
+
+  getGraphStats() {
+    return request("/graph/stats");
+  },
+
+
+  getGraphRelationships() {
+    return request("/graph/relationships");
+  },
+
+
+  // =======================================================
+  // HYBRID BIS SEARCH
+  // =======================================================
+
+  search(
+    query,
+    limit = 5
+  ) {
+    return request(
+      `/search${queryString({
+        q: query,
+        limit,
+      })}`
+    );
+  },
+
+
+  // =======================================================
+  // RAG / AI ASK
+  // =======================================================
+
+  ask(
+    query,
+    limit = 5
+  ) {
+    return request(
+      `/search/ask${queryString({
+        q: query,
+        limit,
+      })}`
+    );
+  },
+
+
+  // =======================================================
+  // AI COMPLIANCE ANALYSIS
+  // =======================================================
+
+  analyzeCompliance(
+    product,
+    limit = 8
+  ) {
+    return request(
+      `/search/compliance${queryString({
+        product,
+        limit,
+      })}`
+    );
+  },
+
+
+  // =======================================================
+  // REPORTS
+  // =======================================================
+
+  getReports() {
+    return request("/reports");
+  },
+
+
+  generateReport(
+    type,
+    params = {}
+  ) {
+    return request(
+      `/reports/generate${queryString({
+        type,
+        ...params,
+      })}`,
+      {
+        method: "POST",
+      }
+    );
+  },
+
+
+  downloadReport(id) {
+    return `${API_URL}/reports/${encodeURIComponent(
+      id
+    )}/download`;
+  },
+
+
+  // =======================================================
+  // GENERIC GET
+  // =======================================================
+
+  get(endpoint) {
+    return request(endpoint);
+  },
+
+
+  // =======================================================
+  // GENERIC POST
+  // =======================================================
+
+  post(
+    endpoint,
+    body
+  ) {
+    return request(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  },
+
+
+  // =======================================================
+  // GENERIC DELETE
+  // =======================================================
+
+  delete(endpoint) {
+    return request(endpoint, {
+      method: "DELETE",
+    });
+  },
 
 };
