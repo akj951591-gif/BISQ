@@ -5,6 +5,10 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models.tender import TenderAnalysis
 from app.services.hybrid_search import hybrid_search
+from app.services.standard_reference_service import (
+    extract_standard_references,
+    exact_standard_chunks,
+)
 
 
 router = APIRouter(
@@ -17,30 +21,224 @@ router = APIRouter(
 # REQUEST SCHEMA
 # =========================================================
 
+
 class TenderTextRequest(BaseModel):
     text: str
     name: str | None = None
 
 
 # =========================================================
+# RETRIEVAL HELPERS
+# =========================================================
+
+
+def build_exact_results(tender_text: str):
+    """
+    Retrieve chunks from standards explicitly referenced
+    in the tender.
+
+    Example:
+        IS 456
+        IS 1786
+        IS 269
+        IS 800
+        IS 4759
+
+    These results get priority over generic semantic matches.
+    """
+
+    references = extract_standard_references(
+        tender_text
+    )
+
+    if not references:
+        print(
+            "[TENDER] No explicit IS references detected.",
+            flush=True,
+        )
+        return []
+
+    print(
+        "[TENDER] Explicit BIS references detected: "
+        + ", ".join(
+            (
+                f"IS {ref['number']}"
+                + (
+                    f":{ref['year']}"
+                    if ref["year"]
+                    else ""
+                )
+            )
+            for ref in references
+        ),
+        flush=True,
+    )
+
+    try:
+        results = exact_standard_chunks(
+            query=tender_text,
+            per_standard=2,
+        )
+
+        for result in results:
+            result["retrieval_type"] = (
+                "exact_standard"
+            )
+            result["exact_standard_match"] = True
+
+        print(
+            f"[TENDER] Exact-standard retrieval returned "
+            f"{len(results)} chunks.",
+            flush=True,
+        )
+
+        return results
+
+    except Exception as error:
+        print(
+            f"[TENDER] Exact-standard retrieval failed: "
+            f"{error}",
+            flush=True,
+        )
+
+        return []
+
+
+def merge_retrieval_results(
+    exact_results,
+    hybrid_results,
+    limit: int,
+):
+    """
+    Merge retrieval results.
+
+    Priority:
+        1. Exact IS-number matches
+        2. Hybrid BM25 + vector matches
+
+    Each BIS standard is represented only once in the
+    final evidence set.
+    """
+
+    final_results = []
+
+    # =====================================================
+    # EXACT STANDARD RESULTS
+    # =====================================================
+
+    exact_document_ids = set()
+
+    for result in exact_results:
+        document_id = result.get(
+            "document_id"
+        )
+
+        if not document_id:
+            continue
+
+        exact_document_ids.add(
+            document_id
+        )
+
+    # Keep only one chunk per exact standard
+    # in the final tender context.
+    exact_seen = set()
+
+    for result in exact_results:
+        document_id = result.get(
+            "document_id"
+        )
+
+        if not document_id:
+            continue
+
+        if document_id in exact_seen:
+            continue
+
+        exact_seen.add(document_id)
+
+        item = dict(result)
+
+        item["retrieval_type"] = (
+            "exact_standard"
+        )
+        item["exact_standard_match"] = True
+        item["rrf_score"] = 1.0
+
+        final_results.append(item)
+
+        if len(final_results) >= limit:
+            return final_results[:limit]
+
+    # =====================================================
+    # HYBRID RESULTS
+    # =====================================================
+
+    hybrid_seen = set()
+
+    for result in hybrid_results:
+        document_id = result.get(
+            "document_id"
+        )
+
+        if not document_id:
+            continue
+
+        # Do not allow a generic semantic result from an
+        # exact standard to replace the exact evidence.
+        if document_id in exact_document_ids:
+            continue
+
+        # Avoid duplicate standards.
+        if document_id in hybrid_seen:
+            continue
+
+        hybrid_seen.add(document_id)
+
+        item = dict(result)
+
+        item["retrieval_type"] = (
+            item.get(
+                "retrieval_type",
+                "hybrid",
+            )
+        )
+
+        item["exact_standard_match"] = False
+
+        final_results.append(item)
+
+        if len(final_results) >= limit:
+            break
+
+    return final_results[:limit]
+
+
+# =========================================================
 # BUILD TENDER ANALYSIS
 # =========================================================
 
-def build_tender_analysis(tender_text: str):
+
+def build_tender_analysis(
+    tender_text: str,
+):
     """
     Analyze a tender against relevant BIS standards.
 
-    Uses:
-    BM25 + BGE-M3 + RRF
+    Retrieval priority:
 
-    Important:
-    Only a limited amount of tender text is sent to the
-    retrieval and LLM pipeline so large PDFs do not cause
-    extremely slow requests.
+    1. Explicit BIS references
+    2. BM25
+    3. BGE-M3 vector search
+    4. RRF
+    5. One representative result per standard
+    6. GPT-OSS 120B evidence-based analysis
     """
 
     if not tender_text.strip():
-        raise ValueError("Tender text is empty.")
+        raise ValueError(
+            "Tender text is empty."
+        )
 
     # -----------------------------------------------------
     # LIMIT SEARCH INPUT
@@ -49,21 +247,66 @@ def build_tender_analysis(tender_text: str):
     search_text = tender_text[:6000]
 
     print(
-        f"[TENDER] Starting hybrid search with "
+        f"[TENDER] Starting BIS retrieval with "
         f"{len(search_text):,} characters...",
         flush=True,
     )
 
-    results = hybrid_search(
+    # =====================================================
+    # 1. EXACT STANDARD RETRIEVAL
+    # =====================================================
+
+    exact_results = build_exact_results(
+        search_text
+    )
+
+    # =====================================================
+    # 2. NORMAL HYBRID RETRIEVAL
+    # =====================================================
+
+    print(
+        "[TENDER] Starting BM25 + BGE-M3 hybrid search...",
+        flush=True,
+    )
+
+    hybrid_results = hybrid_search(
         query=search_text,
-        limit=6,
+        limit=20,
     )
 
     print(
         f"[TENDER] Hybrid search returned "
-        f"{len(results)} results.",
+        f"{len(hybrid_results)} results.",
         flush=True,
     )
+
+    # =====================================================
+    # 3. MERGE EXACT + HYBRID
+    # =====================================================
+
+    results = merge_retrieval_results(
+        exact_results=exact_results,
+        hybrid_results=hybrid_results,
+        limit=8,
+    )
+
+    print(
+        "[TENDER] Final evidence set:",
+        flush=True,
+    )
+
+    for index, result in enumerate(
+        results,
+        start=1,
+    ):
+        print(
+            f"  SOURCE {index}: "
+            f"{result.get('is_number')} | "
+            f"{result.get('title')} | "
+            f"page={result.get('page_number')} | "
+            f"type={result.get('retrieval_type')}",
+            flush=True,
+        )
 
     if not results:
         return {
@@ -82,10 +325,19 @@ def build_tender_analysis(tender_text: str):
 
     source_parts = []
 
-    for index, result in enumerate(results, start=1):
+    for index, result in enumerate(
+        results,
+        start=1,
+    ):
         source_parts.append(
             f"""
 SOURCE {index}
+
+Retrieval Type:
+{result.get("retrieval_type")}
+
+Exact Standard Match:
+{result.get("exact_standard_match")}
 
 BIS Number:
 {result.get("is_number")}
@@ -102,15 +354,21 @@ Year:
 Page:
 {result.get("page_number")}
 
+PDF URL:
+{result.get("pdf_url")}
+
 Content:
 {result.get("content")}
 """
         )
 
-    context = "\n".join(source_parts)
+    context = "\n".join(
+        source_parts
+    )
 
     print(
-        f"[TENDER] Context built from {len(results)} BIS sources.",
+        f"[TENDER] Context built from "
+        f"{len(results)} BIS sources.",
         flush=True,
     )
 
@@ -136,11 +394,15 @@ Content:
 
     analysis_text = tender_text[:12000]
 
-    prompt = f"""
-You are BISQ, an AI system for BIS
-standards and tender compliance analysis.
+    # =====================================================
+    # PROMPT
+    # =====================================================
 
-Analyze the tender text against ONLY the supplied
+    prompt = f"""
+You are BISQ, an AI system for BIS standards
+and tender compliance analysis.
+
+Analyze the tender against ONLY the supplied
 BIS source material.
 
 Do not invent BIS requirements.
@@ -156,29 +418,67 @@ Required JSON structure:
   "summary": "short overall assessment",
   "findings": [
     {{
-      "requirement": "BIS requirement",
-      "assessment": "assessment against tender",
-      "evidence": "exact relevant tender evidence or explain that evidence is missing",
+      "requirement": "specific tender requirement",
+      "assessment": "assessment against the supplied BIS evidence",
+      "evidence": "relevant tender evidence or explain what is missing",
       "source": "Source 1",
       "page": 1
     }}
   ]
 }}
 
-Rules:
+IMPORTANT RETRIEVAL RULES:
 
-1. Use only the supplied BIS source material.
-2. Do not create requirements that are not present.
-3. If tender evidence is missing, use NEEDS_EVIDENCE.
-4. If evidence clearly conflicts with a BIS requirement,
+1. If the tender explicitly mentions an IS number,
+   such as IS 456, IS 1786, IS 269, IS 800,
+   or IS 4759, prefer the source whose BIS Number
+   exactly matches that standard.
+
+2. NEVER use an unrelated BIS standard as evidence
+   merely because its text contains similar words.
+
+3. An exact BIS-number match is stronger evidence
+   than a generic semantic similarity result.
+
+4. If no exact source exists for an explicitly referenced
+   standard, say that evidence is unavailable.
+
+5. Do not substitute one BIS standard for another.
+
+6. Use ONLY the supplied BIS source material.
+
+7. Do not create requirements that are not present.
+
+8. If tender evidence is missing, use NEEDS_EVIDENCE.
+
+9. If evidence clearly conflicts with a BIS requirement,
    mark that finding NON_COMPLIANT.
-5. If the tender clearly satisfies the requirement,
-   mark that finding COMPLIANT.
-6. Keep findings specific.
-7. Include the BIS number where useful.
-8. Page may be null if unavailable.
-9. Do not output Markdown.
-10. Return valid JSON only.
+
+10. If the tender clearly satisfies the requirement,
+    mark that finding COMPLIANT.
+
+11. Keep findings specific.
+
+12. Include the exact BIS number whenever relevant.
+
+13. Page may be null if unavailable.
+
+14. Every finding must reference one of the supplied
+    sources.
+
+15. Do not invent page numbers.
+
+16. Do not invent evidence.
+
+17. Do not output Markdown.
+
+18. Return valid JSON only.
+
+19. The source title must agree with the BIS number.
+
+20. Never claim that IS 62 is evidence for a construction
+    requirement unless the supplied source itself clearly
+    establishes that relationship.
 
 TENDER TEXT:
 
@@ -201,7 +501,11 @@ BIS SOURCE MATERIAL:
                 "role": "system",
                 "content": (
                     "You are a careful BIS compliance "
-                    "analysis system. Return valid JSON only."
+                    "analysis system. "
+                    "Use only supplied BIS sources. "
+                    "Prefer exact BIS-number matches. "
+                    "Never invent requirements or evidence. "
+                    "Return valid JSON only."
                 ),
             },
             {
@@ -243,7 +547,9 @@ BIS SOURCE MATERIAL:
     import json
 
     try:
-        analysis = json.loads(raw_answer)
+        analysis = json.loads(
+            raw_answer
+        )
 
     except json.JSONDecodeError:
         print(
@@ -254,8 +560,9 @@ BIS SOURCE MATERIAL:
         analysis = {
             "status": "NEEDS_EVIDENCE",
             "summary": (
-                "The AI analysis could not be converted "
-                "into structured compliance results."
+                "The AI analysis could not be "
+                "converted into structured "
+                "compliance results."
             ),
             "findings": [],
         }
@@ -266,7 +573,10 @@ BIS SOURCE MATERIAL:
 
     sources = []
 
-    for index, result in enumerate(results, start=1):
+    for index, result in enumerate(
+        results,
+        start=1,
+    ):
         sources.append(
             {
                 "source": index,
@@ -290,6 +600,13 @@ BIS SOURCE MATERIAL:
                 ),
                 "score": result.get(
                     "rrf_score"
+                ),
+                "retrieval_type": result.get(
+                    "retrieval_type"
+                ),
+                "exact_standard_match": result.get(
+                    "exact_standard_match",
+                    False,
                 ),
             }
         )
@@ -318,6 +635,7 @@ BIS SOURCE MATERIAL:
 # =========================================================
 # GET ALL TENDERS
 # =========================================================
+
 
 @router.get("")
 def get_tenders(
@@ -360,6 +678,7 @@ def get_tenders(
 # GET SINGLE TENDER
 # =========================================================
 
+
 @router.get("/{tender_id}")
 def get_tender(
     tender_id: int,
@@ -399,6 +718,7 @@ def get_tender(
 # GET TENDER COMPLIANCE
 # =========================================================
 
+
 @router.get("/{tender_id}/compliance")
 def get_tender_compliance(
     tender_id: int,
@@ -431,6 +751,7 @@ def get_tender_compliance(
 # =========================================================
 # ANALYZE TEXT
 # =========================================================
+
 
 @router.post("/analyze-text")
 def analyze_tender_text(
@@ -501,6 +822,7 @@ def analyze_tender_text(
 # =========================================================
 # ANALYZE PDF / TXT
 # =========================================================
+
 
 @router.post("/analyze")
 async def analyze_tender(
@@ -625,22 +947,22 @@ async def analyze_tender(
                                 f"\n[PAGE {page_number}]\n{text}"
                             )
 
-                        # Print progress every 5 pages
                         if (
                             page_number % 5 == 0
                             or page_number == page_count
                         ):
                             print(
                                 f"[TENDER] Extracted "
-                                f"{page_number}/{page_count} pages...",
+                                f"{page_number}/"
+                                f"{page_count} pages...",
                                 flush=True,
                             )
 
                     except Exception as page_error:
                         print(
                             f"[TENDER] Page "
-                            f"{page_number} extraction failed: "
-                            f"{page_error}",
+                            f"{page_number} extraction "
+                            f"failed: {page_error}",
                             flush=True,
                         )
 
@@ -649,7 +971,7 @@ async def analyze_tender(
                 )
 
                 print(
-                    f"[TENDER] PDF extraction complete. "
+                    "[TENDER] PDF extraction complete. "
                     f"Characters: "
                     f"{len(tender_text):,}",
                     flush=True,
@@ -730,7 +1052,7 @@ async def analyze_tender(
         )
 
         print(
-            f"[TENDER] AI analysis complete. "
+            "[TENDER] AI analysis complete. "
             f"Elapsed: "
             f"{time.time() - started_at:.1f}s",
             flush=True,
@@ -759,7 +1081,7 @@ async def analyze_tender(
         db.refresh(tender)
 
         print(
-            f"[TENDER] Analysis saved successfully. "
+            "[TENDER] Analysis saved successfully. "
             f"ID={tender.id}",
             flush=True,
         )
