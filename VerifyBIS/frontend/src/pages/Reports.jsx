@@ -47,11 +47,15 @@ export default function Reports() {
   function handleDownload(reportId) {
     const url = api.downloadReport(reportId);
 
-    window.open(
-      url,
-      "_blank",
-      "noopener,noreferrer"
-    );
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = `BISQ-report-${reportId}.pdf`;
+    link.rel = "noopener noreferrer";
+
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   }
 
   function formatDate(value) {
