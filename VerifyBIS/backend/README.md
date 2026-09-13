@@ -9,6 +9,35 @@ an httpOnly session cookie (see below).
 
 ## Setup
 
+### Docker (recommended)
+
+Brings up Postgres, Neo4j and the API together — no separate backend start:
+
+```bash
+cd backend
+copy .env.example .env      # then fill in GOOGLE_CLIENT_ID and JWT_SECRET_KEY
+docker compose up -d
+```
+
+The API is served on http://localhost:8000. `app/` is bind-mounted and uvicorn
+runs with `--reload`, so code edits apply without rebuilding; rebuild only when
+`requirements.txt` changes:
+
+```bash
+docker compose up -d --build
+```
+
+`.env` is read at runtime, but `DATABASE_URL` and `NEO4J_URI` are overridden in
+`docker-compose.yml`, because the values in `.env` point at the host's published
+ports rather than the compose network. The first request that needs embeddings
+downloads the ~2.3GB `BAAI/bge-m3` model into the `hf_cache` volume, so that one
+is slow and every later start is not.
+
+### Native
+
+Runs the API on the host against the containerised databases, so it still needs
+`docker compose up -d postgres neo4j`:
+
 ```bash
 cd backend
 python -m venv .venv
@@ -17,6 +46,27 @@ pip install -r requirements.txt
 copy .env.example .env      # then fill in GOOGLE_CLIENT_ID and JWT_SECRET_KEY
 uvicorn app.main:app --reload
 ```
+
+## PDF and image text extraction
+
+Text is read from the PDF's embedded text layer — PyMuPDF (`fitz`) for BIS
+standards ingestion, `pypdf` for tender uploads.
+
+Pages with no usable text layer (scans) fall back to Tesseract OCR, and image
+uploads (PNG/JPEG/TIFF/BMP/WebP) go straight to it. The fallback is per page,
+not per document, so a mostly-digital PDF with a few scanned pages only pays
+for those pages. Pages that already have text never reach the OCR path at all,
+which is why text-layer PDFs are no slower than before.
+
+Scanned pages are collected and recognised in one parallel batch
+(`OCR_MAX_WORKERS`, default 4) rather than one at a time. Tuning knobs are in
+`.env.example`; `OCR_MAX_PAGES` (default 50) caps how many pages a single
+document may OCR, so one large scan cannot stall a request.
+
+OCR degrades gracefully: if the tesseract binary is missing, it logs once,
+disables itself, and text-layer extraction carries on working. The Docker image
+installs it; for native runs install Tesseract yourself and set
+`OCR_TESSERACT_CMD` if it is not on PATH.
 
 ## Authentication
 

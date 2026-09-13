@@ -3,11 +3,12 @@ import time
 import requests
 import fitz
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.bis import BISStandard, BISChunk
+from app.services.ocr import needs_ocr, ocr_pdf_pages
 
 
 CHUNK_SIZE = 1200
@@ -85,15 +86,29 @@ def extract_pdf_chunks(pdf_path: str):
 
     document = fitz.open(pdf_path)
 
+    page_texts = {}
+    needs_ocr_pages = []
+
     for page_index, page in enumerate(document):
         page_number = page_index + 1
 
         text = page.get_text("text")
 
-        if not text.strip():
+        if needs_ocr(text):
+            # Scanned page: defer it, so every such page in this document is
+            # recognised in one parallel batch instead of one at a time.
+            needs_ocr_pages.append(page_number)
             continue
 
-        page_chunks = chunk_text(text)
+        page_texts[page_number] = text
+
+    if needs_ocr_pages:
+        page_texts.update(
+            ocr_pdf_pages(document, needs_ocr_pages)
+        )
+
+    for page_number in sorted(page_texts):
+        page_chunks = chunk_text(page_texts[page_number])
 
         for chunk in page_chunks:
             chunks_with_pages.append(
@@ -173,7 +188,11 @@ def ingest_standard(db, standard):
         return "extraction_failed"
 
 
-def ingest_all_documents():
+def ingest_all_documents(is_numbers=None):
+    """
+    Ingest BIS PDFs. Pass is_numbers (e.g. ["456", "1786"]) to
+    ingest only those standards instead of the whole manifest.
+    """
     db = SessionLocal()
 
     processed = 0
@@ -185,10 +204,18 @@ def ingest_all_documents():
     total_chunks = 0
 
     try:
-        standards = db.scalars(
-            select(BISStandard)
-            .order_by(BISStandard.id)
-        ).yield_per(100)
+        query = select(BISStandard).order_by(BISStandard.id)
+
+        if is_numbers:
+            query = query.where(
+                func.regexp_replace(
+                    BISStandard.is_number,
+                    r"^[^0-9]*([0-9]+).*$",
+                    r"\1",
+                ).in_(is_numbers)
+            )
+
+        standards = db.scalars(query).yield_per(100)
 
         for standard in standards:
 
@@ -274,4 +301,7 @@ def ingest_all_documents():
 
 
 if __name__ == "__main__":
-    ingest_all_documents()
+    import sys
+
+    # python -m app.services.document_ingestion 456 269 1786
+    ingest_all_documents(sys.argv[1:] or None)

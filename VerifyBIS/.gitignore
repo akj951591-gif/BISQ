@@ -1,7 +1,12 @@
 # Local BIS dataset / generated files
-VerifyBIS/backend/data/
-VerifyBIS/backend/standardsiq.db
-VerifyBIS/backend/test-report.pdf
+# (paths are relative to this .gitignore, which lives in VerifyBIS/)
+backend/data/
+backend/uploads/
+backend/standardsiq.db
+backend/test-report.pdf
+
+# Docker build config kept local
+backend/.dockerignore
 
 # Python
 **/__pycache__/

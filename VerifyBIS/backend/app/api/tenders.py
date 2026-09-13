@@ -5,6 +5,12 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models.tender import TenderAnalysis
 from app.services.hybrid_search import hybrid_search
+from app.services.ocr import (
+    needs_ocr,
+    ocr_available,
+    ocr_image_bytes,
+    ocr_pdf_pages,
+)
 from app.services.standard_reference_service import (
     extract_standard_references,
     exact_standard_chunks,
@@ -214,6 +220,126 @@ def merge_retrieval_results(
     return final_results[:limit]
 
 
+def count_indexed_chunks():
+    from sqlalchemy import func, select
+
+    from app.db.session import SessionLocal
+    from app.models.bis import BISChunk
+
+    db = SessionLocal()
+
+    try:
+        return db.scalar(
+            select(func.count(BISChunk.id))
+        ) or 0
+
+    finally:
+        db.close()
+
+
+def build_no_evidence_analysis(
+    tender_text: str,
+):
+    """
+    Explain why no BIS evidence was retrieved instead of
+    returning an empty result.
+
+    Every IS standard the tender cites still becomes a
+    finding, so the gap is visible in the UI and report.
+    """
+
+    references = extract_standard_references(
+        tender_text
+    )
+
+    # "IS 456:2000" and "IS 456" are the same standard.
+    cited = []
+    seen_numbers = set()
+
+    for ref in references:
+        if ref["number"] in seen_numbers:
+            continue
+
+        seen_numbers.add(ref["number"])
+        cited.append(ref)
+
+    knowledge_base_empty = count_indexed_chunks() == 0
+
+    if knowledge_base_empty:
+        print(
+            "[TENDER] BIS knowledge base is EMPTY. "
+            "Run manifest import, document ingestion "
+            "and vector ingestion.",
+            flush=True,
+        )
+
+        reason = (
+            "the BIS knowledge base has not been loaded "
+            "(0 standards indexed)"
+        )
+    else:
+        reason = (
+            "this standard is not in the indexed "
+            "BIS knowledge base"
+        )
+
+    findings = []
+
+    for ref in cited:
+        label = f"IS {ref['number']}" + (
+            f":{ref['year']}" if ref["year"] else ""
+        )
+
+        findings.append(
+            {
+                "requirement": (
+                    f"Tender requires conformance to {label}."
+                ),
+                "assessment": (
+                    "NEEDS_EVIDENCE - compliance cannot be "
+                    f"verified because {reason}."
+                ),
+                "evidence": (
+                    f"The tender explicitly cites {label}, "
+                    "but no BIS source text was available "
+                    "to compare against."
+                ),
+                "source": label,
+                "page": None,
+            }
+        )
+
+    if knowledge_base_empty:
+        summary = (
+            "Analysis could not be completed: the BIS "
+            "knowledge base is empty, so no standards "
+            "were available to check this tender against."
+        )
+    elif cited:
+        summary = (
+            f"The tender cites {len(cited)} BIS "
+            "standard(s), but none of them are in the "
+            "indexed knowledge base."
+        )
+    else:
+        summary = (
+            "No sufficiently relevant BIS standards "
+            "were found in the indexed knowledge base."
+        )
+
+    if cited:
+        summary += " Cited standards: " + ", ".join(
+            f"IS {ref['number']}" for ref in cited
+        ) + "."
+
+    return {
+        "status": "NEEDS_EVIDENCE",
+        "summary": summary,
+        "findings": findings,
+        "sources": [],
+    }
+
+
 # =========================================================
 # BUILD TENDER ANALYSIS
 # =========================================================
@@ -309,15 +435,9 @@ def build_tender_analysis(
         )
 
     if not results:
-        return {
-            "status": "NEEDS_EVIDENCE",
-            "summary": (
-                "No sufficiently relevant BIS standards "
-                "were found in the indexed knowledge base."
-            ),
-            "findings": [],
-            "sources": [],
-        }
+        return build_no_evidence_analysis(
+            search_text
+        )
 
     # =====================================================
     # BUILD BIS SOURCE CONTEXT
@@ -929,7 +1049,8 @@ async def analyze_tender(
                     flush=True,
                 )
 
-                pages = []
+                page_texts = {}
+                scanned_pages = []
 
                 # -----------------------------------------
                 # EXTRACT EACH PAGE
@@ -940,12 +1061,16 @@ async def analyze_tender(
                     start=1,
                 ):
                     try:
-                        text = page.extract_text()
+                        text = page.extract_text() or ""
 
-                        if text:
-                            pages.append(
-                                f"\n[PAGE {page_number}]\n{text}"
+                        if needs_ocr(text):
+                            # No usable text layer: collect it and OCR
+                            # every such page together further down.
+                            scanned_pages.append(
+                                page_number
                             )
+                        else:
+                            page_texts[page_number] = text
 
                         if (
                             page_number % 5 == 0
@@ -966,8 +1091,34 @@ async def analyze_tender(
                             flush=True,
                         )
 
+                # -----------------------------------------
+                # OCR FALLBACK (scanned pages only)
+                # -----------------------------------------
+
+                if scanned_pages:
+                    import fitz
+
+                    # pypdf cannot rasterise, so reopen the same bytes with
+                    # PyMuPDF purely to render the scanned pages.
+                    document = fitz.open(
+                        stream=file_bytes,
+                        filetype="pdf",
+                    )
+
+                    try:
+                        page_texts.update(
+                            ocr_pdf_pages(
+                                document,
+                                scanned_pages,
+                            )
+                        )
+                    finally:
+                        document.close()
+
                 tender_text = "\n\n".join(
-                    pages
+                    f"\n[PAGE {number}]\n"
+                    f"{page_texts[number]}"
+                    for number in sorted(page_texts)
                 )
 
                 print(
@@ -987,6 +1138,50 @@ async def analyze_tender(
                 )
 
         # =================================================
+        # IMAGE (OCR only — there is no text layer)
+        # =================================================
+
+        elif (
+            content_type.startswith("image/")
+            or filename.endswith(
+                (
+                    ".png",
+                    ".jpg",
+                    ".jpeg",
+                    ".tif",
+                    ".tiff",
+                    ".bmp",
+                    ".webp",
+                )
+            )
+        ):
+            print(
+                "[TENDER] Running OCR on image...",
+                flush=True,
+            )
+
+            if not ocr_available():
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Image uploads need OCR, which is "
+                        "not available on this server. "
+                        "Please upload a PDF or TXT file."
+                    ),
+                )
+
+            tender_text = ocr_image_bytes(
+                file_bytes
+            )
+
+            print(
+                "[TENDER] Image OCR complete. "
+                f"Characters: "
+                f"{len(tender_text):,}",
+                flush=True,
+            )
+
+        # =================================================
         # UNSUPPORTED FILE
         # =================================================
 
@@ -995,7 +1190,8 @@ async def analyze_tender(
                 status_code=400,
                 detail=(
                     "Unsupported file type. "
-                    "Please upload a PDF or TXT file."
+                    "Please upload a PDF, image or "
+                    "TXT file."
                 ),
             )
 
