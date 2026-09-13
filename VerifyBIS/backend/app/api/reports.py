@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models.report import Report
 from app.models.tender import TenderAnalysis
+from app.services.pdf_report import build_tender_pdf, build_text_pdf
 
 
 router = APIRouter(
@@ -492,28 +493,17 @@ def download_report(
         )
 
     if tender:
-        html = build_html_report(tender)
+        pdf = build_tender_pdf(tender)
     else:
-        html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>{escape(report.title)}</title>
-</head>
-<body>
-    <h1>{escape(report.title)}</h1>
-    <pre>{escape(report.content)}</pre>
-</body>
-</html>
-"""
+        pdf = build_text_pdf(report.title, report.content)
 
     filename = (
-        f"BISQ-report-{report.id}.html"
+        f"BISQ-report-{report.id}.pdf"
     )
 
     return Response(
-        content=html,
-        media_type="text/html",
+        content=pdf,
+        media_type="application/pdf",
         headers={
             "Content-Disposition": (
                 f'attachment; filename="{filename}"'

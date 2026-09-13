@@ -3,15 +3,24 @@ from sentence_transformers import SentenceTransformer
 
 MODEL_NAME = "BAAI/bge-m3"
 
-print(f"Loading embedding model: {MODEL_NAME}")
+_model = None
 
-model = SentenceTransformer(MODEL_NAME)
 
-print("Embedding model loaded.")
+def get_model() -> SentenceTransformer:
+    # Loaded on first use, not at import time: the model is ~2.3GB, and
+    # loading it during import blocks uvicorn from binding its port.
+    global _model
+
+    if _model is None:
+        print(f"Loading embedding model: {MODEL_NAME}")
+        _model = SentenceTransformer(MODEL_NAME)
+        print("Embedding model loaded.")
+
+    return _model
 
 
 def generate_embedding(text: str) -> list[float]:
-    embedding = model.encode(
+    embedding = get_model().encode(
         text,
         normalize_embeddings=True,
     )
@@ -20,7 +29,7 @@ def generate_embedding(text: str) -> list[float]:
 
 
 def generate_embeddings(texts: list[str]) -> list[list[float]]:
-    embeddings = model.encode(
+    embeddings = get_model().encode(
         texts,
         normalize_embeddings=True,
         batch_size=8,

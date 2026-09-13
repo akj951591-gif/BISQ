@@ -32,6 +32,26 @@ class Settings(BaseSettings):
     BIS_TEXT_DIR: str = "data/text"
     GROQ_API_KEY: str = ""
 
+    # OCR runs only on pages whose text layer is missing or too thin, so these
+    # bound the fallback rather than the common path.
+    OCR_ENABLED: bool = True
+    OCR_LANGUAGE: str = "eng"
+    # 300 DPI is the accuracy/speed sweet spot for Tesseract; below ~200 it
+    # starts misreading small type, above 400 it costs time for no gain.
+    OCR_DPI: int = 300
+    # Page segmentation mode 3 = fully automatic, which suits the mixed
+    # headings, tables and body text of BIS standards and tenders.
+    OCR_PSM: int = 3
+    OCR_MAX_WORKERS: int = 4
+    # Ceiling on pages OCR'd per document, so one large scan cannot stall a
+    # request indefinitely.
+    OCR_MAX_PAGES: int = 50
+    # A page with fewer characters than this is treated as having no real text
+    # layer (scans often carry a stray header or page number).
+    OCR_MIN_CHARS: int = 20
+    # Set only when the tesseract binary is not on PATH (common on Windows).
+    OCR_TESSERACT_CMD: str = ""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="ignore"

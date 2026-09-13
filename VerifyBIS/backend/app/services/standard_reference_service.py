@@ -92,16 +92,15 @@ def find_exact_standards(query: str) -> list[dict]:
         for ref in references:
             params = {
                 "number": ref["number"],
+                "year": ref["year"],
             }
 
             where_sql = (
                 f"{_standard_number_expression()} = :number"
             )
 
-            if ref["year"] is not None:
-                where_sql += " AND year = :year"
-                params["year"] = ref["year"]
-
+            # Prefer the edition the tender asked for, but fall back to the
+            # newest indexed edition rather than returning no evidence at all.
             sql = f"""
                 SELECT
                     id,
@@ -119,7 +118,10 @@ def find_exact_standards(query: str) -> list[dict]:
                     txt_url
                 FROM bis_standards
                 WHERE {where_sql}
-                ORDER BY year DESC NULLS LAST, id DESC
+                ORDER BY
+                    (year = CAST(:year AS integer)) DESC NULLS LAST,
+                    year DESC NULLS LAST,
+                    id DESC
                 LIMIT 1
             """
 

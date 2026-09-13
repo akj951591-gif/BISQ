@@ -11,6 +11,13 @@ services:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    # app/main.py runs create_all() at import, so the backend cannot start
+    # until Postgres is actually accepting connections.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d verifybis"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   neo4j:
     image: neo4j:5
@@ -27,8 +34,51 @@ services:
       - neo4j_logs:/logs
       - neo4j_plugins:/plugins
 
+  backend:
+    build: .
+    container_name: verifybis-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      # Not service_healthy: the neo4j driver connects lazily on first query,
+      # so waiting out its ~40s startup would only delay the API.
+      neo4j:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      # .env points at the host's published ports (127.0.0.1:5433 / :7687).
+      # Inside the compose network that address is the backend container
+      # itself, so both are overridden to reach the databases by service name
+      # on their real container ports. Compose gives `environment` precedence
+      # over `env_file`, and .env keeps working for running uvicorn natively.
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/verifybis
+      NEO4J_URI: bolt://neo4j:7687
+      # The .env value is a Windows path that does not exist in the container;
+      # blank it so import_manifest falls back to its default.
+      BIS_MANIFEST_PATH: ""
+    ports:
+      - "8000:8000"
+    volumes:
+      # Live code reload without rebuilding the image.
+      - ./app:/app/app
+      - ./data:/app/data
+      - ./uploads:/app/uploads
+      # Persists the ~2.3GB bge-m3 model across rebuilds.
+      - hf_cache:/models
+    command: >
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
 volumes:
   postgres_data:
   neo4j_data:
   neo4j_logs:
   neo4j_plugins:
+  hf_cache:

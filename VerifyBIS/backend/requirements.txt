@@ -21,3 +21,6 @@ email-validator
 groq
 python-multipart
 pypdf
+reportlab
+pytesseract
+pillow
